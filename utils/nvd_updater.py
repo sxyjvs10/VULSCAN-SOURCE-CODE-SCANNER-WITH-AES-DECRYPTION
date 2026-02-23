@@ -1,6 +1,6 @@
 import requests
 import time
-from vdb import VulnerabilityDB
+from core.vdb import VulnerabilityDB
 
 class NVDUpdater:
     def __init__(self, db_path="vuln_data.db"):

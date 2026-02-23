@@ -5,23 +5,16 @@ import os
 import hashlib
 import time
 
-try:
-    from core.behavior import SessionManager
-    from core.mapper import Crawler
-    from core.engine import Analyzer
-    from core.report import Reporter
-    from utils.login_manager import LoginManager
-    from core.vdb import VulnerabilityDB
-    from utils.nvd_updater import NVDUpdater
-except ImportError:
-    # Fallback for package execution
-    from .core.behavior import SessionManager
-    from .core.mapper import Crawler
-    from .core.engine import Analyzer
-    from .core.report import Reporter
-    from .utils.login_manager import LoginManager
-    from .core.vdb import VulnerabilityDB
-    from .utils.nvd_updater import NVDUpdater
+# Add parent directory to path to allow importing modules from root
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from core.behavior import SessionManager
+from core.mapper import Crawler
+from core.engine import Analyzer
+from core.report import Reporter
+from utils.login_manager import LoginManager
+from core.vdb import VulnerabilityDB
+from utils.nvd_updater import NVDUpdater
 
 def main():
     parser = argparse.ArgumentParser(description="VULSCAN - Advanced Web Application Source Code Scanner (Client-Side)")
@@ -81,9 +74,13 @@ def main():
             findings_summary["static"] = len(static_findings)
             for f in static_findings:
                 if f['severity'] in ['CRITICAL', 'HIGH']:
-                    # Capture match from regex group if available, else match
-                    val = f.get('match')
-                    # Clean up context for display
+                    # Use decoded value if available (for decrypted secrets), otherwise use the match
+                    if f.get('decoded_value'):
+                        val = f.get('decoded_value')
+                    else:
+                        val = f.get('match')
+                        
+                    # Clean up context for display if needed
                     if "SUSPICIOUS_FUNC_ARG_KEY" in f['type']:
                          # Extract just the key string if possible
                          import re
@@ -146,6 +143,46 @@ def main():
                 print(f"  -> {k}")
         else:
             print("\n[-] No obvious keys found across all strategies.")
+
+        # Save Report if requested
+        if args.output:
+            all_findings = []
+            # Add static findings
+            if 'static_findings' in locals():
+                all_findings.extend(static_findings)
+            
+            # Convert dynamic logs to findings objects
+            for log in logs:
+                all_findings.append({
+                    'url': args.url,
+                    'type': 'DYNAMIC_INTERCEPTION',
+                    'severity': 'HIGH' if any(x in log for x in ["KEY", "IV", "Decrypted"]) else 'INFO',
+                    'description': 'Dynamic interception of cryptographic operation or secret.',
+                    'remediation': 'Review the intercepted data context.',
+                    'match': log[:100] + "...",
+                    'context': log,
+                    'line': 0,
+                    'source': 'DYNAMIC'
+                })
+            
+            # Add pattern findings if any (simulated)
+            for k in findings_summary["keys_found"]:
+                if "[Pattern]" in k:
+                     all_findings.append({
+                        'url': args.url,
+                        'type': 'PATTERN_MATCH',
+                        'severity': 'CRITICAL',
+                        'description': 'Specific obfuscation pattern matched and deobfuscated.',
+                        'remediation': 'Revoke the key.',
+                        'match': k,
+                        'context': k,
+                        'line': 0,
+                        'source': 'PATTERN'
+                    })
+
+            print(f"[*] Saving comprehensive report to {args.output}...")
+            reporter = Reporter(all_findings, verbose=args.verbose)
+            reporter.save(args.output)
         
         sys.exit(0)
 
