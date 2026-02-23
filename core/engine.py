@@ -76,7 +76,7 @@ class Analyzer:
                 'remediation': 'Investigate this custom secret format.'
             },
             'CUSTOM_HARDCODED_SECRETS': {
-                'regex': r'([37]x!A%[DS]\*[IG]-[\w@#$%^&*!]{6,8})|(&a!@0\(l%\+0YU\*\^4g)|(LD@8RG#3SEZ)',
+                'regex': r'([37]x!A%[DS]\*[IG]-[\w@#$%^&*!]{6,8})|(&a!@0\(l%\+0YU\*\^4g)|(LD@8RG#3SEZ)|(3337373832353434326134373264346236313530363435333637353632343430)',
                 'severity': 'CRITICAL',
                 'description': 'Known custom hardcoded secret detected.',
                 'remediation': 'These patterns match known secret keys. Rotate immediately.'

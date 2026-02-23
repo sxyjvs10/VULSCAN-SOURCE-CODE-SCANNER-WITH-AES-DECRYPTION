@@ -190,7 +190,7 @@ class SessionManager:
                     new_findings.append(msg)
                     self.captured_logs.append(msg)
                     print(f"[*] LIVE LOG: {msg}")
-                elif any(x in msg for x in ["KEY (hex)", "KEY (ascii)", "IV (hex)", "IV (ascii)"]):
+                elif any(x in msg for x in ["KEY (hex)", "KEY (ascii)", "KEY (utf8)", "IV (hex)", "IV (ascii)"]):
                     new_findings.append(msg)
                     self.captured_logs.append(msg)
                     print(f"[🔑] {msg}")

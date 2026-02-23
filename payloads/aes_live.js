@@ -1,44 +1,7 @@
 (function() {
     console.log("✅ VULSCAN: Live Exploit Script Loaded");
 
-    // Log all script tags
-    document.querySelectorAll('script').forEach(s => {
-        if (s.src) console.log("📜 SCRIPT SRC:", s.src);
-    });
-
-    // 0. Intercept Fetch to debug
-    const origFetch = window.fetch;
-    window.fetch = function() {
-        const url = arguments[0];
-        // console.log("🌐 FETCH CALL:", url);
-        return origFetch.apply(this, arguments).then(response => {
-            const clone = response.clone();
-            clone.text().then(body => {
-                if (body.includes('"key"') || body.includes('"d"')) {
-                    console.log("📦 VULSCAN: Interesting Body Detected in", url);
-                    console.log("📦 BODY:", body.slice(0, 200));
-                    
-                    // Specific strategy for MISReport XOR
-                    try {
-                        const data = JSON.parse(body);
-                        const encKey = (data.d && data.d.key) || data.key;
-                        if (encKey) {
-                            const xorKey = "XOR2024";
-                            const decoded = atob(encKey);
-                            let decrypted = "";
-                            for(let i=0; i<decoded.length; i++) {
-                                decrypted += String.fromCharCode(decoded.charCodeAt(i) ^ xorKey.charCodeAt(i % xorKey.length));
-                            }
-                            console.log("🔥 VULSCAN: Auto-Decrypted XOR Key:", decrypted);
-                        }
-                    } catch(e) {}
-                }
-            });
-            return response;
-        });
-    };
-
-    // Hook atob
+    // 0. Intercept atob
     const origAtob = window.atob;
     window.atob = function(str) {
         const res = origAtob(str);
@@ -46,30 +9,6 @@
             console.log("🔓 atob intercepted:", str.slice(0, 50), "->", res.slice(0, 50));
         }
         return res;
-    };
-    window.wordArrayToString = function(wordArray) {
-        if (!wordArray) return "";
-        var words = wordArray.words;
-        var sigBytes = wordArray.sigBytes;
-        var str = '';
-        for (var i = 0; i < sigBytes; i++) {
-            var byte = (words[i >>> 2] >>> (24 - (i % 4) * 8)) & 0xff;
-            str += String.fromCharCode(byte);
-        }
-        return str;
-    };
-
-    // Helper: Convert WordArray to Hex
-    window.wordArrayToHex = function(wordArray) {
-        if (!wordArray) return "";
-        var words = wordArray.words;
-        var sigBytes = wordArray.sigBytes;
-        var hex = '';
-        for (var i = 0; i < sigBytes; i++) {
-            var byte = (words[i >>> 2] >>> (24 - (i % 4) * 8)) & 0xff;
-            hex += ('0' + byte.toString(16)).slice(-2);
-        }
-        return hex;
     };
 
     // Helper: Convert Hex to ASCII
@@ -86,60 +25,28 @@
         return str;
     };
 
-    // 1. Check for specific global variables mentioned by user (aesValu, juKu, aesiv, Tkl)
+    // 1. Check for specific global variables & Storage
     function checkGlobals() {
-        // console.log("⏱️ VULSCAN: Global Check Running...");
-        if (typeof aesValu !== 'undefined') {
-            var hex = window.wordArrayToHex(aesValu);
-            console.log("=== FOUND GLOBAL: aesValu ===");
-            console.log("🔑 KEY (hex):", hex);
-            console.log("🔑 KEY (ascii):", window.hexToAscii(hex));
-        }
-        if (typeof juKu !== 'undefined') {
-            var hex = window.wordArrayToHex(juKu);
-            console.log("=== FOUND GLOBAL: juKu ===");
-            console.log("🔑 KEY (hex):", hex);
-            console.log("🔑 KEY (ascii):", window.hexToAscii(hex));
-        }
-        if (typeof aesiv !== 'undefined') {
-            var hex = window.wordArrayToHex(aesiv);
-            console.log("=== FOUND GLOBAL: aesiv ===");
-            console.log("🧩 IV (hex):", hex);
-            console.log("🧩 IV (ascii):", window.hexToAscii(hex));
-        }
-        if (typeof iv !== 'undefined') {
-            var hex = window.wordArrayToHex(iv);
-            console.log("=== FOUND GLOBAL: iv ===");
-            console.log("🧩 IV (hex):", hex);
-            console.log("🧩 IV (ascii):", window.hexToAscii(hex));
-        }
-        if (typeof Tkl !== 'undefined') {
-            console.log("=== FOUND GLOBAL: Tkl ===");
+        if (typeof aesValu !== 'undefined') console.log("=== FOUND GLOBAL: aesValu ===", aesValu);
+        if (typeof juKu !== 'undefined') console.log("=== FOUND GLOBAL: juKu ===", juKu);
+        if (typeof aesiv !== 'undefined') console.log("=== FOUND GLOBAL: aesiv ===", aesiv);
+
+        if (!window.storageDumped) {
+            console.log("💾 STORAGE DUMP (Cookies):", document.cookie);
             try {
-                if (typeof Tkl === 'object' && Tkl.sigBytes) {
-                    var hex = window.wordArrayToHex(Tkl);
-                    console.log("🔑 KEY (hex):", hex);
-                    console.log("🔑 KEY (ascii):", window.hexToAscii(hex));
-                } else {
-                    console.log("Value:", Tkl.toString());
-                }
-            } catch(e) {
-                console.log("Value (Raw):", Tkl);
-            }
+                console.log("💾 STORAGE DUMP (Local):", JSON.stringify(localStorage));
+                console.log("💾 STORAGE DUMP (Session):", JSON.stringify(sessionStorage));
+            } catch(e) {}
+            window.storageDumped = true;
         }
     }
 
-    // 2. Install Interceptor
+    // 2. Install Interceptor (Precise Strategy Matching User Request)
     const origApply = Function.prototype.apply;
-    
-    // Helper: Buffer to Hex
-    function bufToHex(buffer) {
-        return Array.prototype.map.call(new Uint8Array(buffer), x => ('00' + x.toString(16)).slice(-2)).join('');
-    }
 
-    // Intercept CryptoJS
     Function.prototype.apply = function(ctx, args) {
         try {
+            // Detect CryptoJS AES.encrypt call pattern
             if (
                 args &&
                 args.length >= 3 &&
@@ -153,20 +60,28 @@
                 const cfg = args[2];
                 const msg = args[0];
 
-                console.log("🔥 AES CALL INTERCEPTED (CryptoJS)");
-                try { 
-                    var kHex = key.toString();
-                    console.log("🔑 KEY (hex):", kHex);
-                    console.log("🔑 KEY (ascii):", window.hexToAscii(kHex));
+                console.group("🔥 AES CALL INTERCEPTED");
+                
+                const kHex = key?.toString?.();
+                console.log("🔑 KEY (hex):", kHex);
+                
+                // Try UTF8 (User requested)
+                try {
+                    // Try direct wordarray to utf8 conversion if CryptoJS is available
+                    if (window.CryptoJS && window.CryptoJS.enc && window.CryptoJS.enc.Utf8) {
+                        console.log("🔑 KEY (utf8):", key.toString(window.CryptoJS.enc.Utf8));
+                    } else {
+                        // Fallback to our hexToAscii helper
+                        console.log("🔑 KEY (ascii):", window.hexToAscii(kHex));
+                    }
                 } catch(e) {}
-                try { 
-                    var iHex = cfg.iv.toString();
-                    console.log("🧩 IV (hex):", iHex);
-                    console.log("🧩 IV (ascii):", window.hexToAscii(iHex));
-                } catch(e) {}
-                try { console.log("📦 PLAINTEXT:", msg.toString()); } catch(e) {}
+
+                console.log("🧩 IV (hex):", cfg.iv?.toString?.());
+                console.log("📦 PLAINTEXT:", msg?.toString?.());
+                console.groupEnd();
             }
         } catch (e) {}
+
         return origApply.call(this, ctx, args);
     };
 
@@ -176,11 +91,8 @@
         window.crypto.subtle.importKey = function(format, keyData, algorithm, extractable, keyUsages) {
             try {
                 console.log("🔥 WEB CRYPTO importKey INTERCEPTED");
-                console.log("🛠 Format:", format);
-                console.log("🛠 Algorithm:", JSON.stringify(algorithm));
-                
                 if (format === 'raw') {
-                    const hex = bufToHex(keyData);
+                    const hex = Array.prototype.map.call(new Uint8Array(keyData), x => ('00' + x.toString(16)).slice(-2)).join('');
                     console.log("🔑 KEY (hex):", hex);
                     console.log("🔑 KEY (ascii):", window.hexToAscii(hex));
                 }
@@ -190,8 +102,6 @@
         console.log("✅ VULSCAN: Web Crypto interceptor installed.");
     }
 
-    console.log("✅ VULSCAN: Global AES interceptor installed.");
-    
-    // Check globals periodically
+    console.log("✅ VULSCAN: Global AES interceptor installed. Now login / call API.");
     setInterval(checkGlobals, 2000);
 })();
