@@ -102,6 +102,30 @@ def main():
             "keys_found": []
         }
 
+        # 0. Discovery & Reconnaissance (New)
+        print("\n[PHASE 0] Discovery & Reconnaissance...")
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(args.url).netloc
+            dorker = GoogleDorker(domain)
+            dorker.print_dorks()
+        except Exception as e:
+            print(f"[-] Dork generation failed: {e}")
+
+        print("\n[*] Starting Hidden Directory Scan (Default Wordlist)...")
+        try:
+            enumerator = PathEnumerator(args.url, threads=args.threads)
+            found_paths = enumerator.start()
+            print(f"[+] Hidden Scan Complete. Found {len(found_paths)} paths.")
+            # We don't print all 100+ paths here to avoid cluttering the summary view, 
+            # but we could save them or print a sample.
+            for p in found_paths[:5]:
+                 print(f"    - {p['url']} (Status: {p['status']}, Size: {p['size']})")
+            if len(found_paths) > 5:
+                print(f"    ... and {len(found_paths)-5} more.")
+        except Exception as e:
+            print(f"[-] Hidden scan failed: {e}")
+
         # 1. Static Scan
         print("\n[PHASE 1] Static Analysis (Crawling & Source Code Scan)...")
         # Ensure browser is off for pure static crawl unless requested, but let's default to fast crawl
