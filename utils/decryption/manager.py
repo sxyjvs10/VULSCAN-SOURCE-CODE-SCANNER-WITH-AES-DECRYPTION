@@ -3,6 +3,7 @@ from .strategies.base64_hex import Base64HexStrategy
 from .strategies.keyforge_strategy import KeyForgeStrategy
 from .strategies.binary_chain import BinaryChainStrategy
 from .strategies.tkl_strategy import TklStrategy
+from .strategies.xor_obfuscation import XORObfuscationStrategy
 
 class DecryptionManager:
     def __init__(self):
@@ -13,6 +14,7 @@ class DecryptionManager:
         # Add strategies here. Order matters (most specific to least specific).
         self.strategies.append(TklStrategy())
         self.strategies.append(KeyForgeStrategy())
+        self.strategies.append(XORObfuscationStrategy())
         self.strategies.append(BinaryChainStrategy())
         self.strategies.append(Base64HexStrategy())
 
