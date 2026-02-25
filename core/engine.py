@@ -170,6 +170,12 @@ class Analyzer:
                 'severity': 'HIGH',
                 'description': 'Suspicious Base64 string (potential encoded key starting with 7x...).',
                 'remediation': 'Decode and verify if this is a hardcoded secret.'
+            },
+            'SENSITIVE_FILE_EXPOSURE': {
+                'regex': r'([\w\-./]*\.(env|bak|bkp|old|tmp|sql|dump|db|pem|crt|key|git|svn|ds_store|zip|tar|gz|rar|7z))|\b(config\.php|wp-config\.php|settings\.py|database\.yml|appsettings\.json|web\.config|httpd\.conf|nginx\.conf|php\.ini)\b|(/etc/(passwd|shadow))',
+                'severity': 'MEDIUM',
+                'description': 'Reference to a potentially sensitive file/path detected.',
+                'remediation': 'Ensure these files are not publicly accessible.'
             }
         }
 
