@@ -1,6 +1,7 @@
+import hashlib
 from bs4 import BeautifulSoup
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 import threading
 import re
 import xml.etree.ElementTree as ET
@@ -16,6 +17,7 @@ class Crawler:
         self.extracted_content = {}  # {url: content}
         self.network_urls = set()    # Track URLs from network logs
         self.discovered_links = set() # To avoid re-queueing same discovery
+        self.content_hashes = set()  # To avoid redundant analysis of identical content
 
     def start(self):
         # Auto-discovery
@@ -111,46 +113,55 @@ class Crawler:
             self.visited.add(self.base_url)
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {}
-            # Start with base URL
-            futures[executor.submit(self.process_url, self.base_url, 0)] = self.base_url
+            # {future: url}
+            futures = {executor.submit(self.process_url, self.base_url, 0): self.base_url}
             
-            # Add discovered links
+            # Initial discovered links
             for link in self.discovered_links:
-                with self.lock:
-                    if link not in self.visited:
-                        self.visited.add(link)
-                        futures[executor.submit(self.process_url, link, 1)] = link # Depth 1 for discovered
+                if link not in self.visited:
+                    self.visited.add(link)
+                    futures[executor.submit(self.process_url, link, 1)] = link
 
+            # Loop until all tasks are done
             while futures:
-                # Wait for the next future to complete (as_completed yields immediately when one is done)
-                # We iterate once and break to allow adding new futures to the dict
-                for future in as_completed(futures):
+                done, _ = wait(futures, return_when=FIRST_COMPLETED)
+                
+                for future in done:
                     url = futures.pop(future)
                     try:
                         new_links = future.result()
-                        # Submit new links if within depth
                         if new_links:
                             for link, depth in new_links:
                                 with self.lock:
                                     if link not in self.visited:
                                         self.visited.add(link)
-                                        # Submit new task
                                         futures[executor.submit(self.process_url, link, depth)] = link
                     except Exception as e:
                         print(f"[-] Error processing {url}: {e}")
-                    
-                    # Break to refresh the 'futures' dictionary in 'as_completed' since we modified it
-                    break 
         
         return self.extracted_content, self.network_urls
 
     def process_url(self, url, current_depth):
+        # 1. Skip non-analyzable binary/media assets early
+        SKIP_EXT = ('.jpg', '.jpeg', '.png', '.gif', '.svg', '.woff', '.woff2', '.ttf', '.eot', '.mp4', '.mp3', '.pdf', '.zip', '.gz', '.tar', '.iso')
+        if any(url.lower().endswith(ext) for ext in SKIP_EXT):
+            return []
+
         print(f"[*] [Session Active] Crawling: {url} (Depth: {current_depth})")
         
         try:
             response = self.session_manager.get(url)
             if response and response.status_code == 200:
+                # 2. Content Deduplication
+                # Avoid re-scanning identical content served under different URLs
+                text_content = response.text
+                content_hash = hashlib.md5(text_content.encode('utf-8', errors='ignore')).hexdigest()
+                
+                with self.lock:
+                    if content_hash in self.content_hashes:
+                        return [] # Duplicate content
+                    self.content_hashes.add(content_hash)
+
                 # Check for login redirect (session invalidation)
                 if "login" in response.url and "login" not in url:
                     print(f"[!] Warning: Possible session logout detected at {url}")
