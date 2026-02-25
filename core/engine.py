@@ -1,5 +1,7 @@
 import re
 import urllib.parse
+import base64
+import json
 from utils.component_checker import ComponentChecker
 from utils.decryption.manager import DecryptionManager
 
@@ -192,8 +194,11 @@ class Analyzer:
             
             # 1. Check for reflected inputs from the URL itself
             self._check_reflection(url, content, source)
+            
+            # 2. Check for IDOR candidates in URL parameters
+            self._check_idor(url, source)
 
-            # 2. Check for known vulnerabilities in components
+            # 3. Check for known vulnerabilities in components
             if self.component_checker:
                 comp_findings = self.component_checker.check(url, content)
                 for f in comp_findings:
@@ -207,7 +212,7 @@ class Analyzer:
             self.findings.extend(decryption_findings)
             # --------------------------------------
 
-            # 3. Check each pattern against content
+            # 4. Check each pattern against content
             for name, data in self.patterns.items():
                 pattern = data['regex']
                 matches = re.finditer(pattern, content)
@@ -227,6 +232,158 @@ class Analyzer:
                     self.findings.append(finding)
         
         return self.findings
+
+    def _check_idor(self, url, source='STATIC'):
+        """
+        Analyzes URL parameters AND path for potential IDOR candidates.
+        Advanced checks: Path IDs, JWTs, Base64 encoded IDs.
+        """
+        parsed_url = urllib.parse.urlparse(url)
+        params = urllib.parse.parse_qs(parsed_url.query)
+        
+        suspicious_params = ['id', 'user', 'account', 'profile', 'order', 'invoice', 'report', 'doc', 'file', 'key', 'token', 'uid', 'uuid', 'pid', 'item', 'customer', 'transaction', 'member', 'group']
+        
+        # --- 1. Query Parameter Analysis ---
+        for param, values in params.items():
+            param_lower = param.lower()
+            is_suspicious_name = any(s in param_lower for s in suspicious_params) or param_lower.endswith('id')
+            
+            for value in values:
+                # A. Numeric ID
+                if is_suspicious_name and value.isdigit():
+                    self.findings.append({
+                        'url': url,
+                        'type': 'POTENTIAL_IDOR_NUMERIC',
+                        'severity': 'MEDIUM',
+                        'description': f'Potential IDOR (Numeric) in parameter "{param}".',
+                        'remediation': 'Ensure access controls are in place. Numeric IDs are easily enumerated.',
+                        'match': f"{param}={value}",
+                        'context': url,
+                        'line': 0,
+                        'source': source
+                    })
+                
+                # B. UUID/GUID
+                elif is_suspicious_name and re.match(r'^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$', value):
+                    self.findings.append({
+                        'url': url,
+                        'type': 'POTENTIAL_IDOR_UUID',
+                        'severity': 'LOW',
+                        'description': f'Potential IDOR (UUID) in parameter "{param}".',
+                        'remediation': 'Verify access controls. UUIDs prevent enumeration but not unauthorized access.',
+                        'match': f"{param}={value}",
+                        'context': url,
+                        'line': 0,
+                        'source': source
+                    })
+
+                # C. JWT Detection
+                if value.startswith('eyJ') and value.count('.') == 2:
+                    try:
+                        # Decode payload (middle part)
+                        payload = value.split('.')[1]
+                        # Fix padding
+                        padding = len(payload) % 4
+                        if padding: payload += '=' * (4 - padding)
+                        
+                        decoded_bytes = base64.urlsafe_b64decode(payload)
+                        decoded_json = json.loads(decoded_bytes)
+                        
+                        # Check for ID-like fields in JWT
+                        jwt_suspicious = ['sub', 'uid', 'user_id', 'id', 'email', 'account']
+                        found_claims = [k for k in decoded_json.keys() if any(s in k.lower() for s in jwt_suspicious)]
+                        
+                        if found_claims:
+                            self.findings.append({
+                                'url': url,
+                                'type': 'POTENTIAL_IDOR_JWT',
+                                'severity': 'HIGH',
+                                'description': f'JWT token found in parameter "{param}" containing user identifiers: {found_claims}.',
+                                'remediation': 'Ensure the token signature is verified and not just decoded.',
+                                'match': f"{param}=JWT(...)",
+                                'context': f"Claims: {found_claims}",
+                                'line': 0,
+                                'source': source
+                            })
+                    except Exception:
+                        pass # Not a valid JWT or JSON
+
+                # D. Base64 Encoded ID
+                elif re.match(r'^[a-zA-Z0-9+/]+={0,2}$', value) and len(value) > 1:
+                    try:
+                        decoded_bytes = base64.b64decode(value, validate=True)
+                        decoded_str = decoded_bytes.decode('utf-8', errors='ignore')
+                        
+                        if decoded_str.isdigit():
+                             self.findings.append({
+                                'url': url,
+                                'type': 'POTENTIAL_IDOR_BASE64',
+                                'severity': 'MEDIUM',
+                                'description': f'Base64 encoded numeric ID found in parameter "{param}".',
+                                'remediation': 'Encoding is not encryption. Ensure access controls.',
+                                'match': f"{param}={value} -> {decoded_str}",
+                                'context': url,
+                                'line': 0,
+                                'source': source
+                            })
+                        elif decoded_str.strip().startswith('{') and decoded_str.strip().endswith('}'):
+                             # JSON object?
+                             try:
+                                 json_obj = json.loads(decoded_str)
+                                 # Check keys
+                                 if any(s in k.lower() for k in json_obj.keys() for s in suspicious_params):
+                                     self.findings.append({
+                                        'url': url,
+                                        'type': 'POTENTIAL_IDOR_BASE64_JSON',
+                                        'severity': 'HIGH',
+                                        'description': f'Base64 encoded JSON object with ID fields found in parameter "{param}".',
+                                        'remediation': 'Do not pass access control objects via client-side parameters.',
+                                        'match': f"{param}={value} -> {decoded_str}",
+                                        'context': url,
+                                        'line': 0,
+                                        'source': source
+                                    })
+                             except:
+                                 pass
+                    except Exception:
+                        pass
+
+        # --- 2. Path-based Analysis ---
+        path_segments = parsed_url.path.strip('/').split('/')
+        for i, segment in enumerate(path_segments):
+            # Context comes from previous segment (e.g., /users/123)
+            context = path_segments[i-1].lower() if i > 0 else ""
+            
+            # Numeric ID in path
+            if segment.isdigit() and len(segment) < 20: 
+                # Heuristic: Only interesting if context is meaningful
+                if context and any(s in context for s in suspicious_params):
+                    self.findings.append({
+                        'url': url,
+                        'type': 'POTENTIAL_IDOR_PATH',
+                        'severity': 'MEDIUM',
+                        'description': f'Potential Path-based IDOR: Numeric ID "{segment}" found after "{context}".',
+                        'remediation': 'Ensure proper access controls for RESTful resources.',
+                        'match': f".../{context}/{segment}/...",
+                        'context': url,
+                        'line': 0,
+                        'source': source
+                    })
+            
+            # UUID in path
+            elif re.match(r'^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$', segment):
+                 if context and any(s in context for s in suspicious_params):
+                    self.findings.append({
+                        'url': url,
+                        'type': 'POTENTIAL_IDOR_PATH_UUID',
+                        'severity': 'LOW',
+                        'description': f'Potential Path-based IDOR: UUID "{segment}" found after "{context}".',
+                        'remediation': 'Verify access controls.',
+                        'match': f".../{context}/{segment}/...",
+                        'context': url,
+                        'line': 0,
+                        'source': source
+                    })
 
     def _check_reflection(self, url, content, source='STATIC'):
         """
