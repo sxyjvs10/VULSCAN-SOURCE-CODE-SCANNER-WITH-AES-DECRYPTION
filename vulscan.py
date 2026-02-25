@@ -5,6 +5,9 @@ import os
 import hashlib
 import time
 
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # Add parent directory to path to allow importing modules from root
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -15,6 +18,8 @@ from core.report import Reporter
 from utils.login_manager import LoginManager
 from core.vdb import VulnerabilityDB
 from utils.nvd_updater import NVDUpdater
+from core.dorker import GoogleDorker
+from core.discovery import PathEnumerator
 
 def main():
     parser = argparse.ArgumentParser(description="VULSCAN - Advanced Web Application Source Code Scanner (Client-Side)")
@@ -39,6 +44,11 @@ def main():
     # New Strategies
     parser.add_argument("--live-exploit", action="store_true", help="Inject AES Interceptor and monitor for keys (Requires -b)")
     parser.add_argument("--scan-all", action="store_true", help="Run ALL strategies (Static, Dynamic) to find keys.")
+    
+    # Discovery Features
+    parser.add_argument("--dorks", action="store_true", help="Generate and display Google Dorks for the target domain")
+    parser.add_argument("--hidden-scan", action="store_true", help="Perform a directory brute-force scan to find hidden files/folders")
+    parser.add_argument("--wordlist", help="Custom wordlist file for --hidden-scan (optional)")
 
     args = parser.parse_args()
 
@@ -46,6 +56,37 @@ def main():
     print("[*] Initializing VULSCAN...")
     vuln_db = VulnerabilityDB()
     final_cookies = args.cookies
+
+    # --- Discovery & Reconnaissance Features ---
+    if args.dorks:
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(args.url).netloc
+            dorker = GoogleDorker(domain)
+            dorker.print_dorks()
+            print("-" * 60)
+        except Exception as e:
+            print(f"[-] Google Dork generation failed: {e}")
+
+    if args.hidden_scan:
+        print("[*] Starting Hidden Directory Scan...")
+        # Load wordlist if provided
+        wordlist = None
+        if args.wordlist:
+            try:
+                with open(args.wordlist, 'r') as f:
+                    wordlist = [line.strip() for line in f if line.strip()]
+            except Exception as e:
+                print(f"[-] Failed to load wordlist: {e}")
+                sys.exit(1)
+        
+        enumerator = PathEnumerator(args.url, wordlist=wordlist, threads=args.threads)
+        found_paths = enumerator.start()
+        print(f"[+] Hidden Scan Complete. Found {len(found_paths)} paths.")
+        for p in found_paths:
+             print(f"    - {p['url']} (Status: {p['status']}, Size: {p['size']})")
+        print("-" * 60)
+    # -------------------------------------------
 
     # Helper to get payload path
     payload_path = os.path.join(os.path.dirname(__file__), "payloads", "aes_live.js")
